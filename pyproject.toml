@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshbloom"
+version = "0.1.0.dev0"
+description = "Tree support and solid infill STL generator for FDM/FFF and legacy slicers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "shapely>=2.0",
+    "trimesh>=4.0",
+    "scipy>=1.11",
+    "networkx>=3.0",
+    "rtree>=1.2",
+    "manifold3d>=3.0",
+    "scikit-image>=0.22",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+boolean = ["manifold3d>=2.3"]
+voxel = ["scikit-image>=0.22"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "mapbox-earcut>=1.0"]
+
+[project.scripts]
+meshbloom = "treesupport.cli:main"
+meshbloom-app = "treesupport.gui:main"
+tree-support-gen = "treesupport.cli:main"
+tree-support-app = "treesupport.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+    "slow: 実行時間の長い integration test",
+]
