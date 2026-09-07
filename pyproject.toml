@@ -34,6 +34,9 @@ tree-support-app = "treesupport.gui:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+treesupport = ["assets/*.stl", "assets/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

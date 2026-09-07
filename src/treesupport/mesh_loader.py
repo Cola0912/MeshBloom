@@ -2,6 +2,7 @@
 
 * 座標変換は一切行わない (センタリング禁止)。``T_model == T_support`` を守るため。
 * 読み込み時に watertight / manifold / winding を診断する。
+* 同じ頂点を複数回参照するゼロ面積の面は除外する。頂点座標は変更しない。
 * ``repair=True`` のときのみ、位相修復を試みる (頂点マージ・法線整合・穴埋め)。
 """
 
@@ -103,7 +104,7 @@ class MeshLoader:
         p = Path(path)
         if not p.exists():
             raise FileNotFoundError(f"mesh file not found: {p}")
-        # process=True は「一致する頂点の溶接」と「縮退面の除去」のみを行う。
+        # process=True で一致する頂点を溶接する。残る縮退面は from_trimesh で扱う。
         # 平行移動・スケール・センタリングは一切行わないため T_model は保存される。
         # STL は頂点を共有しない形式なので、溶接しないと watertight 判定が常に偽になる。
         obj = trimesh.load(p, force="mesh", process=True)
@@ -114,6 +115,18 @@ class MeshLoader:
         mesh = self._as_trimesh(mesh)
         if len(mesh.faces) == 0 or not np.isfinite(mesh.vertices).all():
             raise ValueError("mesh must contain finite triangle geometry")
+        # STL vertex welding can leave faces such as (a, a, b). They have no
+        # surface area but incorrectly add edge references to manifold checks.
+        # Do not use a geometric height threshold: thin valid triangles must
+        # survive, and the source mesh/file must remain unchanged.
+        keep = np.all(np.diff(np.sort(mesh.faces, axis=1), axis=1) != 0, axis=1)
+        removed = int(np.count_nonzero(~keep))
+        if removed:
+            mesh = mesh.copy()
+            mesh.update_faces(keep)
+            mesh.metadata["meshbloom_removed_collapsed_faces"] = removed
+            if len(mesh.faces) == 0:
+                raise ValueError("mesh contains only collapsed triangles")
         if self.repair:
             mesh = self._repair(mesh)
         return LoadedMesh(mesh=mesh, source=source, diagnostics=self.diagnose(mesh))

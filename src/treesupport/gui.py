@@ -141,6 +141,7 @@ class Studio:
         examples.pack(fill="x")
         self._button(examples, "片持ち板デモ", lambda: self.demo("support")).pack(side="left", expand=True, fill="x")
         self._button(examples, "キューブデモ", lambda: self.demo("infill")).pack(side="left", expand=True, fill="x", padx=(6, 0))
+        self._button(sidebar, "3DBenchy を開く", self.open_benchy).pack(fill="x", pady=(6, 0))
         self.model_info = tk.StringVar(value="モデル未選択\n単位 mm · 元の座標と印刷姿勢を保持")
         ttk.Label(sidebar, textvariable=self.model_info, wraplength=310, style="Muted.TLabel").pack(anchor="w", pady=10)
         pose = ttk.Frame(sidebar)
@@ -472,6 +473,12 @@ class Studio:
         factory = (lambda: cantilever(column=5, arm=10, depth=8, height=8, plate=2)) if kind == "support" else (lambda: unit_cube(16))
         self._work(factory, lambda m: self.set_model(m, "片持ち板デモ" if kind == "support" else "16 mm キューブ"))
 
+    def open_benchy(self):
+        if self.busy:
+            return
+        from .sample_models import load_benchy
+        self._work(load_benchy, lambda m: self.set_model(m, "3DBenchy.stl"))
+
     def set_model(self, model, name, remember_original=True):
         self.model = model
         self.model_name = name
@@ -489,6 +496,9 @@ class Studio:
         self.z.set((lo+hi)/2)
         self.status.set("モデルを読み込みました。設定を確認して生成してください。")
         self._log("緑: 生成形状 / グレー: 元モデル\n姿勢調整はモデル全体に作用します。読み込んだだけでは元の座標を保持します。\n浮いたモデルの下を支える場合は、そのままサポートを生成してください。")
+        removed = model.metadata.get("meshbloom_removed_collapsed_faces", 0)
+        if removed and remember_original:
+            self._log(f"読み込み時にゼロ面積の面 {removed:,} 枚を除外しました。\n元のSTLと頂点座標は変更していません。\n緑: 生成形状 / グレー: 元モデル")
         self.result_info.set("準備完了  /  パラメータを確認して生成してください。")
         self._sync_controls()
         self.draw(reset_camera=True)
@@ -626,9 +636,9 @@ class Studio:
                 triangles = mesh.triangles
             if not len(triangles):
                 continue
-            # Display budget only. Export always uses every triangle.
-            step = max(1, int(np.ceil(len(triangles)/60000)))
-            ax.add_collection3d(Poly3DCollection(triangles[::step], facecolors=color,
+            # Skipping faces creates fake holes in dense models such as Benchy.
+            # Keep the complete surface in the preview as well as the export.
+            ax.add_collection3d(Poly3DCollection(triangles, facecolors=color,
                                                  edgecolors="#304a4b" if self.wireframe.get() else color,
                                                  linewidths=.25 if self.wireframe.get() else 0, alpha=1, shade=True,
                                                  zsort="average"))

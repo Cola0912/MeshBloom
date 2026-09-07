@@ -181,3 +181,18 @@ def test_close_waits_for_export_callback(studio):
         app.root.update()
         time.sleep(.02)
     assert app.closed and finished == [True]
+
+
+def test_bundled_benchy_import_preserves_selected_mode(studio):
+    app, _ = studio
+    app.tabs.select(1)
+    app.root.update()
+    app.open_benchy()
+    pump(app, timeout=60)
+    assert app.model_name == "3DBenchy.stl"
+    assert app.model.is_volume
+    assert len(app.model.faces) == 225154
+    assert app._mode() == "infill"
+    assert "552" in app.log.get("1.0", "end")
+    assert not app.generate_button.instate(["disabled"])
+    assert app.bundle is None

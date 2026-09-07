@@ -1,5 +1,11 @@
 # サードパーティ
 
+## 同梱モデル
+
+`src/treesupport/assets/3DBenchy.stl`: ユーザー提供の#3DBenchyテストモデル。
+公式モデルのライセンスはCC0 1.0 Universal。
+作者・参照元・元ファイルのSHA-256は[同梱モデルの説明](src/treesupport/assets/README.md)を参照。
+
 ## 実行時依存ライブラリ
 
 | library | version | license | usage |
