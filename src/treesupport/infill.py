@@ -22,8 +22,12 @@ class InfillConfig:
     shell_thickness: float = 1.2
     pitch: float = 0.4
     max_grid_points: int = 2_000_000
+    nozzle_diameter: float = .4
+    line_width: float = .4
 
     def __post_init__(self):
+        from .print_profile import PrintProfile
+        profile = PrintProfile(self.nozzle_diameter, self.line_width)
         if self.pattern not in ("gyroid", "diamond", "cubic"):
             raise ValueError("pattern must be gyroid, diamond or cubic")
         for name in ("cell_size", "wall_thickness", "shell_thickness", "pitch"):
@@ -31,6 +35,8 @@ class InfillConfig:
                 raise ValueError(f"{name} must be finite and > 0")
         if self.wall_thickness >= self.cell_size / 2:
             raise ValueError("wall_thickness must be less than half the cell size")
+        if min(self.wall_thickness, self.shell_thickness) < profile.width - 1e-9:
+            raise ValueError("格子・外殻の厚みはライン幅以上にしてください。")
         if self.pitch > min(self.wall_thickness, self.shell_thickness) / 3 + 1e-9:
             raise ValueError("pitch must be <= one third of wall and shell thickness")
         if self.cell_size / self.pitch < 12:

@@ -18,6 +18,8 @@ dependencies = [
     "manifold3d>=3.0",
     "scikit-image>=0.22",
     "matplotlib>=3.8",
+    "pyopengltk>=0.0.4",
+    "PyOpenGL>=3.1.7",
 ]
 
 [project.optional-dependencies]

@@ -34,7 +34,17 @@ def union_meshes(parts: list[trimesh.Trimesh], mode: UnionMode,
 def _boolean_union(parts: list[trimesh.Trimesh]) -> trimesh.Trimesh | None:
     # Let Manifold perform the complete reduction. Repeated Trimesh round-trips
     # can merge nearly coincident vertices and invalidate intermediate meshes.
-    return trimesh.boolean.union(parts, engine="manifold") if parts else None
+    if not parts:
+        return None
+    result = trimesh.boolean.union(parts, engine="manifold")
+    # The adapter welds Manifold's float32 output. Coincident vertices can
+    # leave zero-area (a, a, b) faces at a junction. Remove only those faces;
+    # do not fill holes or discard thin, valid geometry. The validator still
+    # checks the resulting solid before the app allows export.
+    keep = np.all(np.diff(np.sort(result.faces, axis=1), axis=1) != 0, axis=1)
+    if not keep.all():
+        result.update_faces(keep)
+    return result
 
 
 # ----------------------------------------------------------------------

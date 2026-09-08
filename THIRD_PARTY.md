@@ -19,7 +19,9 @@
 | scikit-image | >=0.22 (検証 0.26.0) | BSD-3-Clause | インフィルとvoxel/SDFのmarching cubes |
 | mapbox_earcut | 任意 (検証 2.0.0) | ISC | trimesh の多角形三角形分割補助 |
 | rtree | >=1.2 (検証 1.4.1) | MIT | trimesh の距離計算・空間索引 |
-| matplotlib | >=3.8 (検証 3.11.1) | Matplotlib license (同梱LICENSE参照) | デスクトップの3D・断面プレビュー |
+| matplotlib | >=3.8 (検証 3.11.1) | Matplotlib license (同梱LICENSE参照) | 2D断面プレビュー |
+| pyopengltk | >=0.0.4 (検証 0.0.4) | MIT | Tk内のOpenGLコンテキスト |
+| PyOpenGL | >=3.1.7 (検証 3.1.10) | BSD-style (同梱license.txt参照) | GPU描画・頂点バッファ |
 | pytest | 開発時 | MIT | テスト |
 
 (間接依存: GEOS (LGPL-2.1, shapely が同梱バイナリとして配布))
@@ -34,10 +36,13 @@
 | CuraEngine | AGPL-3.0 | `src/TreeSupportTipGenerator.cpp` | overhang からの tip サンプリング、線分上への最大距離サンプリング、輪郭補助 tip |
 | CuraEngine | AGPL-3.0 | `src/TreeModelVolumes.cpp` | collision の半径量子化キャッシュ、avoidance の下から上への構築、z 方向 collision 累積と xy テーパ |
 | PrusaSlicer | AGPL-3.0 | `src/libslic3r/Support/OrganicSupport.cpp` | bottom-up influence trim、influence area 内 Laplacian smoothing、tube 押し出しと分岐処理 |
+| OrcaSlicer | AGPL-3.0 | `src/libslic3r/Support/TreeSupportCommon.hpp`, `TreeSupport3D.cpp` | ライン幅・先端径・基準枝径の分離、先端遷移と枝の太り角度 |
 | Slic3r (legacy) | AGPL-3.0 | `xs/src/libslic3r/SupportMaterial.cpp` | レイヤ差分によるオーバーハング検出の考え方 |
 
 参考論文: Vanek et al., *Clever Support: Efficient Support Structure Generation for
 Digital Fabrication*, CGF 2014 (DOI 10.1111/cgf.12437) — 枝の合流と傾斜角制約の考え方。
+
+2026-09-08の参照URL・MeshBloom側の対応範囲は[設計メモ](docs/TREE_SUPPORT_METHOD.md)を参照。
 
 **AGPL-3.0 の扱い**: 上記プロジェクトのソースコードは一切コピーしていない。
 本ツールの実装はアルゴリズム記述 (公開 Wiki / 論文 / ソース読解による理解) に基づく

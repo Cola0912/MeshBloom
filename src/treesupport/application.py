@@ -102,5 +102,10 @@ def export_bundle(bundle: ArtifactBundle, directory: str | Path) -> Path:
         exporter.export(mesh, target / name)
     (target / "report.json").write_text(json.dumps(bundle.report, indent=2, ensure_ascii=False,
                                                   allow_nan=False), encoding="utf-8")
-    (target / "Simplify3D-v5.txt").write_text(SLICER_GUIDE, encoding="utf-8-sig")
+    cfg = bundle.report.get("config", {})
+    from .print_profile import PrintProfile
+    profile = PrintProfile(cfg.get("nozzle_diameter", .4), cfg.get("line_width", .4))
+    dimensions = (f"この出力の寸法基準: ノズル {profile.nozzle_diameter:g} mm / ライン幅 {profile.width:g} mm\n"
+                  "STLには押出設定が含まれません。Simplify3D側でもノズル径・押出幅を設定してください。\n\n")
+    (target / "Simplify3D-v5.txt").write_text(dimensions + SLICER_GUIDE, encoding="utf-8-sig")
     return target

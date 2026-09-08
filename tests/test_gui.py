@@ -65,7 +65,7 @@ def test_pose_reset_and_plate_sections(studio):
         app.view_mode.set(mode)
         app.draw()
         app.root.update()
-        assert (app.ax3d is None) == (mode == "断面")
+        assert (app.viewport.winfo_manager() == "") == (mode == "断面")
         assert (app.ax2d is None) == (mode == "3D")
 
 
@@ -152,6 +152,7 @@ def test_worker_keeps_mode_and_invalidates_stale_exports(tmp_path, monkeypatch, 
         assert app._meshes()[0][0] is app.model
         app.show_generated.set(True)
         app.cutaway.set(True)
+        app.view_mode.set("3D + 断面")
         app.draw()
         root.update()
         app.figure.savefig(tmp_path / "preview.png")
@@ -196,3 +197,70 @@ def test_bundled_benchy_import_preserves_selected_mode(studio):
     assert "552" in app.log.get("1.0", "end")
     assert not app.generate_button.instate(["disabled"])
     assert app.bundle is None
+
+
+def test_gpu_camera_does_not_rebuild_mesh_or_section(studio, monkeypatch, tmp_path):
+    import numpy as np
+    from PIL import Image
+    app, _ = studio
+    app.root.deiconify()
+    app.set_model(unit_cube(8), "cube")
+    app.root.update()
+    viewport = app.viewport
+    assert viewport.context_created and not viewport.error
+    viewport.tkMakeCurrent()
+    viewport.redraw()
+    uploads = viewport.upload_count
+    vertices = app.model.vertices.copy()
+    monkeypatch.setattr(app.model, "section", lambda **k: pytest.fail("Camera must not recompute sections"))
+    viewport.camera.pan(30, 20, 400)
+    viewport.orbit(40, 10)
+    viewport.zoom(2)
+    viewport.redraw()
+    assert viewport.upload_count == uploads
+    np.testing.assert_array_equal(app.model.vertices, vertices)
+    viewport.fit()
+    viewport.save_image(tmp_path / "gpu.png")
+    pixels = np.asarray(Image.open(tmp_path / "gpu.png"))
+    assert pixels.std() > 10  # A visible shaded model, not just a cleared framebuffer.
+    app.close()
+    assert viewport._disposed and not viewport._buffers and viewport._frame_job is None
+
+
+def test_open_surface_is_viewable_but_cannot_generate(studio, monkeypatch, tmp_path):
+    app, _ = studio
+    mesh = unit_cube(4)
+    mesh.update_faces(list(range(11)))
+    path = tmp_path / "open.stl"
+    mesh.export(path)
+    monkeypatch.setattr(gui.filedialog, "askopenfilename", lambda **kw: str(path))
+    app.open_model()
+    pump(app)
+    assert app.model is not None and not app.model.is_volume
+    assert app.generate_button.instate(["disabled"])
+    app.generate()
+    assert not app.busy
+
+
+def test_nozzle_line_width_apply_and_profile_roundtrip(studio, monkeypatch, tmp_path):
+    from treesupport.ui_settings import configuration
+    app, _ = studio
+    app.values["nozzle_diameter"].set(".6")
+    app.values["line_width"].set("0")
+    app.apply_print_dimensions()
+    assert float(app.values["wall_thickness"].get()) == pytest.approx(2.025)
+    assert float(app.values["tip_diameter"].get()) == pytest.approx(1.35)
+    assert float(app.values["contact_diameter"].get()) == pytest.approx(.675)
+    app.values["contact_shape"].set("rounded")
+    app.values["line_width"].set(".5")
+    app.apply_print_dimensions()
+    assert float(app.values["tip_diameter"].get()) == pytest.approx(1.)
+    path = tmp_path / "nozzle.json"
+    monkeypatch.setattr(gui.filedialog, "asksaveasfilename", lambda **kw: str(path))
+    monkeypatch.setattr(gui.filedialog, "askopenfilename", lambda **kw: str(path))
+    app.save_profile()
+    app.values["contact_shape"].set("flat")
+    app.load_profile()
+    config = configuration({k: v.get() for k, v in app.values.items()}, "support")
+    assert config.contact_shape == "rounded" and config.nozzle_diameter == .6
+    assert config.effective_line_width == .5 and config.branch_profile == "organic"

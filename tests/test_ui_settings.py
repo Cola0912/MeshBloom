@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-from treesupport.ui_settings import (SUPPORT_FIELDS, INFILL_FIELDS, PRESETS,
+from treesupport.ui_settings import (SUPPORT_FIELDS, INFILL_FIELDS, PRINT_FIELDS, CHOICE_FIELDS, PRESETS,
                                     configuration, load_settings, save_settings)
 
 
 def defaults():
-    return {key: value for key, (_, value) in (SUPPORT_FIELDS | INFILL_FIELDS).items()}
+    return {key: info[1] for key, info in (PRINT_FIELDS | SUPPORT_FIELDS | INFILL_FIELDS | CHOICE_FIELDS).items()}
 
 
 def test_settings_roundtrip_and_corrupt_input(tmp_path):

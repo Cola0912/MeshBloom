@@ -5,6 +5,7 @@
 
 規則
 ----
+``branch_profile=linear`` の既存規則:
 1. tip: ``r = tip_diameter / 2``
 2. 1 レイヤ降下: ``r <- min(r_max, r + branch_diameter_growth/2 * layer_height)``
 3. merge: ``r <- min(r_max, sqrt(r1^2 + r2^2))``  (断面積保存)
@@ -14,6 +15,9 @@
 
 いずれも「太らせた結果 influence area が消えるなら、太らせない」という
 フォールバックと組み合わせて使う (呼び出し側の責務)。
+
+``organic`` はライン幅とノズル径で制約した先端遷移、および太り角度を使う。
+参照元との対応と独自の補間は docs/TREE_SUPPORT_METHOD.md に記載する。
 """
 
 from __future__ import annotations
@@ -34,9 +38,20 @@ class RadiusSolver:
     def tip_radius(self) -> float:
         return max(self.config.tip_radius, self.config.min_printable_feature * 0.5)
 
-    def grow(self, radius: float) -> float:
+    def grow(self, radius: float, distance_to_tip: int | None = None) -> float:
         """1 レイヤ降下したときの半径。"""
         cfg = self.config
+        if cfg.branch_profile == "organic" and distance_to_tip is not None:
+            height = distance_to_tip * cfg.layer_height
+            transition = max(cfg.contact_height, 2*cfg.nozzle_diameter,
+                             (cfg.branch_diameter-cfg.tip_diameter)/2 / math.tan(math.radians(35)))
+            t = min(1., height/transition)
+            # Smooth transition from the contact neck to the nominal branch;
+            # then a conical radius growth. Merged branches never shrink.
+            target = cfg.tip_radius + (cfg.branch_diameter/2-cfg.tip_radius)*(t*t*(3-2*t))
+            target += max(0., height-transition)*math.tan(math.radians(cfg.branch_diameter_angle))
+            grown = max(radius, target)
+            return min(cfg.max_radius, radius+cfg.effective_line_width/2, grown)
         return min(cfg.max_radius, radius + cfg.radius_growth_per_layer)
 
     def merge(self, r1: float, r2: float) -> float:

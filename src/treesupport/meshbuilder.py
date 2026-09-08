@@ -148,11 +148,43 @@ class MeshBuilder:
             points = np.asarray(pts, dtype=float)
             rr = np.asarray(radii, dtype=float)
             points, rr = self._simplify(points, rr)
+            if graph.nodes[chain[-1]].is_tip:
+                # Keep junction overlaps intact; only shape the free terminal.
+                min_z = graph.nodes[chain[0]].layer * lh
+                points, rr = self._contact_profile(points, rr, min_z)
             # 分岐した子の tube も必ず閉じる。下端キャップは親 tube の内側に
             # 埋まるので実害が無く、各成分が閉じていることで
             # watertight / manifold を満たせる。
             out.append(_Path(points, rr, cap_bottom=True, cap_top=True))
         return out
+
+    def _contact_profile(self, points, radii, min_z=0.):
+        cfg = self.config
+        if cfg.contact_shape == "flat" and cfg.contact_diameter == 0:
+            return points, radii
+        top = points[-1, 2]
+        bottom = max(points[0, 2], min_z, top-cfg.contact_height)
+        if top-bottom <= 1e-10:
+            return points, radii
+        # Additional rings approximate the shoulder without extending the top
+        # or growing beyond the collision-checked tube at any height.
+        extra = np.linspace(bottom, top, 13)
+        extra = extra[np.min(np.abs(extra[:, None]-points[None, :, 2]), axis=1) > 1e-8]
+        zs = np.sort(np.r_[points[:, 2], extra])
+        result = np.column_stack([np.interp(zs, points[:, 2], points[:, axis]) for axis in range(3)])
+        rr = np.interp(zs, points[:, 2], radii)
+        mask = zs >= bottom
+        t = (zs[mask]-bottom)/(top-bottom)
+        contact = cfg.effective_contact_diameter/2
+        base = float(np.interp(bottom, points[:, 2], radii))
+        if cfg.contact_shape == "rounded":
+            weight = np.sqrt(np.maximum(0., 1-t*t))
+        elif cfg.contact_shape == "flat":
+            weight = np.maximum(0., 1-2*t)  # straight contact neck in the top half
+        else:
+            weight = 1-t
+        rr[mask] = np.minimum(rr[mask], contact + (base-contact)*weight)
+        return result, rr
 
     # ------------------------------------------------------------------
     def _simplify(self, points: np.ndarray,

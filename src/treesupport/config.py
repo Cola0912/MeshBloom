@@ -36,6 +36,8 @@ class SupportConfig:
     """生成パラメータ一式。全て mm / deg。"""
 
     # --- スライス ---
+    nozzle_diameter: float = field(default=.4, kw_only=True)
+    line_width: float = field(default=.4, kw_only=True)
     layer_height: float = 0.20
     #: 1 スラブあたりのサンプル平面数。>=2 なら下端と上端を含む和を取る。
     #: 1 にすると従来のスラブ中央 1 枚サンプリング (Z ギャップ保証が弱くなる)。
@@ -58,6 +60,9 @@ class SupportConfig:
 
     # --- tip ---
     tip_diameter: float = 0.80
+    contact_shape: str = field(default="flat", kw_only=True)  # capped at tip Z
+    contact_diameter: float = field(default=0., kw_only=True)  # 0 uses the tip diameter
+    contact_height: float = field(default=.8, kw_only=True)
     tip_spacing: float = 2.50
     tip_corner_spacing_factor: float = 1.0   # 輪郭補助 tip の間隔倍率
     tip_coverage_radius: float = 0.0         # 0 なら tip_spacing から自動
@@ -68,6 +73,9 @@ class SupportConfig:
 
     # --- 枝 ---
     branch_angle_preferred: float = 25.0
+    branch_profile: str = field(default="linear", kw_only=True)
+    branch_diameter: float = field(default=2., kw_only=True)
+    branch_diameter_angle: float = field(default=5., kw_only=True)
     branch_angle_max: float = 40.0
     branch_diameter_max: float = 8.0
     branch_diameter_growth: float = 0.175    # mm(直径)/mm(高さ)。約 5 deg 相当
@@ -148,6 +156,8 @@ class SupportConfig:
         self.validate()
 
     def validate(self) -> None:
+        from .print_profile import PrintProfile
+        PrintProfile(self.nozzle_diameter, self.line_width)
         for name, value in vars(self).items():
             if isinstance(value, (int, float)) and not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
@@ -161,6 +171,18 @@ class SupportConfig:
             )
         if self.tip_diameter < self.min_printable_feature:
             raise ValueError("tip_diameter must be >= min_printable_feature")
+        if self.contact_shape not in ("flat", "tapered", "rounded"):
+            raise ValueError("contact_shape must be flat, tapered or rounded")
+        if self.contact_diameter < 0 or self.contact_height <= 0:
+            raise ValueError("contact_diameter must be >= 0 and contact_height must be > 0")
+        if not self.min_printable_feature <= self.effective_contact_diameter <= self.tip_diameter:
+            raise ValueError("接触径は最小ライン幅以上、先端径以下にしてください。")
+        if self.branch_profile not in ("linear", "organic"):
+            raise ValueError("branch_profile must be linear or organic")
+        if self.branch_profile == "organic" and not self.tip_diameter <= self.branch_diameter <= self.branch_diameter_max:
+            raise ValueError("先端径 <= 枝径 <= 最大枝径にしてください。")
+        if not 0 <= self.branch_diameter_angle < 45:
+            raise ValueError("枝の太り角度は0以上45度未満にしてください。")
         if self.branch_diameter_max < self.tip_diameter:
             raise ValueError("branch_diameter_max must be >= tip_diameter")
         if self.top_z_gap < 0.0 or self.bottom_z_gap < 0.0 or self.xy_gap < 0.0:
@@ -200,6 +222,15 @@ class SupportConfig:
     @property
     def tip_radius(self) -> float:
         return self.tip_diameter * 0.5
+
+    @property
+    def effective_contact_diameter(self):
+        return self.contact_diameter or self.tip_diameter
+
+    @property
+    def effective_line_width(self):
+        from .print_profile import PrintProfile
+        return PrintProfile(self.nozzle_diameter, self.line_width).width
 
     @property
     def max_radius(self) -> float:
@@ -289,5 +320,7 @@ class SupportConfig:
             "z_gap_layers_top": self.z_gap_layers_top,
             "z_gap_layers_bottom": self.z_gap_layers_bottom,
             "actual_top_z_gap": self.actual_top_z_gap,
+            "effective_line_width": self.effective_line_width,
+            "effective_contact_diameter": self.effective_contact_diameter,
         }
         return d

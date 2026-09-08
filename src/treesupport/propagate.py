@@ -235,7 +235,7 @@ class TreePropagator:
 
     # ------------------------------------------------------------------
     def _radius_ladder(self, node: SupportNode, next_layer: int) -> list[float]:
-        grown = self.radius.grow(node.radius)
+        grown = self.radius.grow(node.radius, node.dtt + 1)
         target = self.radius.clamp(self.radius.flare(grown, next_layer))
         if not self.config.radius_growth_fallback:
             return [target]

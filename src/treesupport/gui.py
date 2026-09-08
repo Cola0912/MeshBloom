@@ -12,11 +12,14 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from .application import SLICER_GUIDE, build_bundle, export_bundle, load_model
+from .application import SLICER_GUIDE, build_bundle, export_bundle
 from .testmodels import cantilever, unit_cube
-from .ui_settings import SUPPORT_FIELDS, INFILL_FIELDS, PRESETS, configuration, load_settings, save_settings
+from .ui_settings import (SUPPORT_FIELDS, INFILL_FIELDS, PRINT_FIELDS, CHOICE_FIELDS, PRESETS,
+                          configuration, load_settings, save_settings)
+from .print_profile import PrintProfile
+from .mesh_loader import MeshLoader
+from .viewer import MeshViewport
 
 BG, PANEL, TEXT, MUTED, ACCENT = "#111820", "#1b2530", "#e4edf4", "#91a5b7", "#59d9b4"
 
@@ -152,6 +155,12 @@ class Studio:
         place.pack(fill="x", pady=5)
         self._button(place, "ベッドに置く", lambda: self.transform_model("bed")).pack(side="left", expand=True, fill="x")
         self._button(place, "元の姿勢に戻す", lambda: self.transform_model("reset")).pack(side="left", expand=True, fill="x", padx=(4, 0))
+        ttk.Label(sidebar, text="ノズルとライン幅 / mm", font=("Yu Gothic UI", 11, "bold")).pack(anchor="w", pady=(10, 4))
+        for key, (label, value) in PRINT_FIELDS.items():
+            self._field(sidebar, key, label, value)
+        self._button(sidebar, "ライン幅を太さに適用", self.apply_print_dimensions).pack(fill="x", pady=5)
+        ttk.Label(sidebar, text="先端2本・接触1本・枝5本・格子/外殻3本分。\n適用後も各寸法を個別に変更できます。",
+                  style="Muted.TLabel").pack(anchor="w")
         ttk.Label(sidebar, text="02   生成する形状", font=("Yu Gothic UI", 12, "bold")).pack(anchor="w", pady=(8, 10))
         self.tabs = ttk.Notebook(sidebar)
         self.tabs.pack(fill="x")
@@ -160,6 +169,15 @@ class Studio:
         self.tabs.add(support, text="ツリーサポート")
         self.tabs.add(infill, text="インフィル")
         self.tabs.bind("<<NotebookTabChanged>>", lambda e: self.invalidate())
+        for key, (label, default, options) in CHOICE_FIELDS.items():
+            ttk.Label(support, text=label).pack(anchor="w")
+            var = tk.StringVar(value=default)
+            self.values[key] = var
+            combo = ttk.Combobox(support, textvariable=var, values=options, state="readonly")
+            combo.pack(fill="x", pady=(2, 5))
+            self.controls.append(combo)
+            var.trace_add("write", lambda *a: self.invalidate())
+        ttk.Label(support, text="flat: 平面 / tapered: 絞り / rounded: 丸み\n接触面は指定Zギャップの下で止まります。", style="Muted.TLabel").pack(anchor="w", pady=(0, 5))
         for key, (label, value) in SUPPORT_FIELDS.items():
             self._field(support, key, label, value)
         ttk.Label(support, text="長さは mm。角度は鉛直からの傾き。\nビルドプレートから伸びる枝を生成します。",
@@ -191,10 +209,13 @@ class Studio:
         right.pack(side="left", fill="both", expand=True)
         top = ttk.Frame(right)
         top.pack(fill="x")
-        self.view_mode = tk.StringVar(value="3D + 断面")
+        self.view_mode = tk.StringVar(value="3D")
         views = ttk.Combobox(top, textvariable=self.view_mode, state="readonly", values=("3D + 断面", "3D", "断面"), width=13)
         views.pack(side="left")
         views.bind("<<ComboboxSelected>>", lambda e: self.draw())
+        self.perspective = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="透視投影", variable=self.perspective,
+                        command=self.update_view_options).pack(side="left", padx=8)
         self.cutaway = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="半分を隠して内部を見る", variable=self.cutaway,
                         command=self.draw).pack(side="right")
@@ -203,22 +224,39 @@ class Studio:
         self.show_model = tk.BooleanVar(value=True)
         self.show_generated = tk.BooleanVar(value=True)
         self.wireframe = tk.BooleanVar(value=False)
+        self.show_grid = tk.BooleanVar(value=True)
         for text, var in (("外形 / モデル", self.show_model), ("生成した形状", self.show_generated), ("メッシュ線", self.wireframe)):
             ttk.Checkbutton(objects, text=text, variable=var, command=self.draw).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(objects, text="グリッド", variable=self.show_grid,
+                        command=self.update_view_options).pack(side="left")
         camera = ttk.Frame(right)
         camera.pack(fill="x", pady=(6, 0))
-        for name, angles in (("斜め", (24, -55)), ("上", (90, -90)), ("前", (0, -90)), ("横", (0, 0))):
-            ttk.Button(camera, text=name, width=5, command=lambda a=angles: self.set_camera(*a)).pack(side="left", padx=(0, 3))
-        ttk.Button(camera, text="全体を表示", command=lambda: self.draw(reset_camera=True)).pack(side="left", padx=3)
-        ttk.Label(camera, text="ドラッグで回転", style="Muted.TLabel").pack(side="right")
+        directions = {"斜め": (25, -55), "上": (90, -90), "下": (-90, -90),
+                      "前": (0, -90), "後": (0, 90), "右": (0, 0), "左": (0, 180)}
+        self.camera_direction = tk.StringVar(value="斜め")
+        camera_combo = ttk.Combobox(camera, textvariable=self.camera_direction,
+                                    values=tuple(directions), state="readonly", width=6)
+        camera_combo.pack(side="left", padx=(0, 5))
+        camera_combo.bind("<<ComboboxSelected>>", lambda e: self.set_camera(*directions[self.camera_direction.get()]))
+        ttk.Button(camera, text="全体表示  F", command=lambda: self.viewport.fit()).pack(side="left", padx=3)
+        ttk.Button(camera, text="＋", width=3, command=lambda: self.viewport.zoom(1)).pack(side="left", padx=3)
+        ttk.Button(camera, text="−", width=3, command=lambda: self.viewport.zoom(-1)).pack(side="left", padx=3)
+        ttk.Button(camera, text="画像を保存", command=self.save_view_image).pack(side="right")
+        self.viewport_host = ttk.Frame(right)
+        self.viewport_host.rowconfigure(0, weight=1)
+        self.viewport_host.columnconfigure(0, weight=1, uniform="preview")
+        self.viewport_host.columnconfigure(1, weight=1, uniform="preview")
+        self.viewport = MeshViewport(self.viewport_host)
+        self.section_panel = ttk.Frame(self.viewport_host)
         self.figure = Figure(figsize=(8, 5), dpi=100, facecolor=BG)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=right)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.section_panel)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, pady=(8, 0))
-        self.toolbar = NavigationToolbar2Tk(self.canvas, right, pack_toolbar=False)
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.section_panel, pack_toolbar=False)
         self.toolbar.update()
         self.toolbar.pack(fill="x")
         self.toolbar.configure(background=PANEL)
         zbar = ttk.Frame(right)
+        self.zbar = zbar
         zbar.pack(fill="x", pady=6)
         self.zlabel = ttk.Label(zbar, text="断面 Z = —", width=21)
         self.zlabel.pack(side="left")
@@ -236,8 +274,11 @@ class Studio:
         result_label = ttk.Label(right, textvariable=self.result_info, style="Muted.TLabel")
         result_label.pack(fill="x", pady=(6, 0))
         # Reserve the controls/results first; only the viewport should shrink.
-        preview_widgets = (top, objects, camera, self.canvas.get_tk_widget(),
-                           self.toolbar, zbar, self.log, result_label)
+        self.navigation_hint = ttk.Label(right, text="左ドラッグ: 回転  /  右・中・Shift＋左: 移動  /  ホイール: 拡大縮小  /  ダブルクリック: 全体表示",
+                                         style="Muted.TLabel", wraplength=800)
+        right.bind("<Configure>", lambda e: self.navigation_hint.configure(wraplength=max(200, e.width-10)))
+        preview_widgets = (top, objects, camera, self.viewport_host,
+                           self.navigation_hint, zbar, self.log, result_label)
         for widget in preview_widgets:
             widget.pack_forget()
         for row, widget in enumerate(preview_widgets):
@@ -285,7 +326,7 @@ class Studio:
     def _sync_controls(self):
         for control in self.controls:
             control.state(["disabled"] if self.busy else ["!disabled"])
-        self.generate_button.state(["disabled"] if self.busy or self.model is None else ["!disabled"])
+        self.generate_button.state(["disabled"] if self.busy or self.model is None or not self.model.is_volume else ["!disabled"])
         self.export_button.state(["disabled"] if self.busy or self.bundle is None else ["!disabled"])
         self.cancel_button.state(["!disabled"] if self.busy and self.cancellable and not self.cancel_event.is_set() else ["disabled"])
         self.open_output_button.state(["!disabled"] if self.output_path else ["disabled"])
@@ -318,6 +359,23 @@ class Studio:
             self._applying_settings = False
         self.invalidate()
         self.status.set(f"「{self.preset.get()}」を適用しました。")
+
+    def apply_print_dimensions(self):
+        if self.busy:
+            return
+        try:
+            profile = PrintProfile(float(self.values["nozzle_diameter"].get()), float(self.values["line_width"].get()))
+        except ValueError as exc:
+            messagebox.showerror("ノズル・ライン幅を確認してください", str(exc), parent=self.root)
+            return
+        self._applying_settings = True
+        try:
+            for key, value in profile.dimensions().items():
+                self.values[key].set(f"{value:.6g}")
+        finally:
+            self._applying_settings = False
+        self.invalidate()
+        self.status.set(f"ライン幅 {profile.width:.3f} mm から太さを設定しました。必要に応じて個別に調整できます。")
 
     def save_profile(self):
         if self.busy:
@@ -362,9 +420,32 @@ class Studio:
                 messagebox.showerror("フォルダーを開けません", str(exc), parent=self.root)
 
     def set_camera(self, elevation, azimuth):
-        if self.ax3d is not None:
-            self.ax3d.view_init(elev=elevation, azim=azimuth)
-            self.canvas.draw_idle()
+        self.viewport.set_camera(elevation, azimuth)
+
+    def update_view_options(self):
+        self.viewport.camera.perspective = self.perspective.get()
+        self.viewport.wireframe = self.wireframe.get()
+        self.viewport.show_grid = self.show_grid.get()
+        self.viewport.cutaway = self.cutaway.get()
+        if self.model is not None:
+            self.viewport.cut_x = float(self.model.bounds[:, 0].mean())
+        self.viewport.request_render()
+
+    def save_view_image(self):
+        is_section = self.view_mode.get() == "断面"
+        if not is_section and (not self.viewport.context_created or self.viewport.error):
+            return
+        path = filedialog.asksaveasfilename(title="断面画像を保存" if is_section else "3D画像を保存",
+                                          defaultextension=".png", filetypes=[("PNG", "*.png")])
+        if path:
+            try:
+                if is_section:
+                    self.figure.savefig(path)
+                else:
+                    self.viewport.save_image(path)
+                self.status.set(f"画像を保存しました: {path}")
+            except Exception as exc:
+                messagebox.showerror("画像を保存できません", str(exc), parent=self.root)
 
     def cancel(self):
         if self.busy and self.cancellable:
@@ -383,6 +464,7 @@ class Studio:
         self.root.after_cancel(self._poll_id)
         if self._slice_job:
             self.root.after_cancel(self._slice_job)
+        self.viewport.dispose()
         self.root.destroy()
 
     def _log(self, text):
@@ -464,7 +546,7 @@ class Studio:
             return
         path = filedialog.askopenfilename(filetypes=[("3D model", "*.stl *.obj *.3mf *.ply"), ("All", "*.*")])
         if path:
-            self._work(lambda: load_model(path), lambda m: self.set_model(m, Path(path).name))
+            self._work(lambda: MeshLoader().load(path).mesh, lambda m: self.set_model(m, Path(path).name))
 
     def demo(self, kind):
         if self.busy:
@@ -490,7 +572,8 @@ class Studio:
         self.bundle = None
         self.export_button.state(["disabled"])
         x, y, z = model.extents
-        self.model_info.set(f"{name}\n{x:.2f} × {y:.2f} × {z:.2f} mm\n{len(model.faces):,} 面  /  最下点 Z {model.bounds[0,2]:.2f} mm")
+        solid = "閉じたソリッド" if model.is_volume else "開いた面 / ソリッドではありません"
+        self.model_info.set(f"{name}\n{x:.2f} × {y:.2f} × {z:.2f} mm\n{len(model.faces):,} 面  /  最下点 Z {model.bounds[0,2]:.2f} mm\n{solid}")
         lo, hi = self._z_bounds()
         self._update_z_bounds()
         self.z.set((lo+hi)/2)
@@ -500,6 +583,8 @@ class Studio:
         if removed and remember_original:
             self._log(f"読み込み時にゼロ面積の面 {removed:,} 枚を除外しました。\n元のSTLと頂点座標は変更していません。\n緑: 生成形状 / グレー: 元モデル")
         self.result_info.set("準備完了  /  パラメータを確認して生成してください。")
+        if not model.is_volume:
+            self.result_info.set("閲覧モード  /  形状生成には閉じたソリッドが必要です。")
         self._sync_controls()
         self.draw(reset_camera=True)
 
@@ -508,6 +593,9 @@ class Studio:
             return
         if self.model is None:
             messagebox.showinfo("モデルを選択", "STLを開くか、デモを選択してください。")
+            return
+        if not self.model.is_volume:
+            self.status.set("閲覧できますが、形状生成には閉じたソリッドが必要です。")
             return
         kind = self._mode()
         try:
@@ -533,6 +621,8 @@ class Studio:
         if bundle.kind == "support":
             v = bundle.report["validation"]["metrics"]
             detail = f"先端 {v['tip_count']} / 根元 {v['root_count']} / 対象領域の被覆率 {v['coverage_ratio']:.1%}"
+            gap = bundle.report["config"]["derived"]["actual_top_z_gap"]
+            detail += f" / Zギャップ下限 {gap:g} mm"
         else:
             detail = f"外殻込みの材料体積比 {bundle.report['material_fraction_including_shell']:.1%}"
             self.cutaway.set(True)
@@ -608,61 +698,30 @@ class Studio:
     def draw(self, reset_camera=False):
         if not hasattr(self, "figure"):
             return
-        previous = getattr(self, "ax3d", None)
-        angles = (previous.elev, previous.azim) if previous is not None and not reset_camera else (24, -55)
-        self.figure.clear()
         mode = self.view_mode.get()
-        self.ax3d = self.figure.add_subplot(121 if mode == "3D + 断面" else 111, projection="3d") if mode != "断面" else None
-        self.ax2d = self.figure.add_subplot(122 if mode == "3D + 断面" else 111) if mode != "3D" else None
-        self.toolbar.update()
-        if self.ax3d is not None:
-            self._draw_3d(angles)
-        self.figure.subplots_adjust(left=.06, right=.96, bottom=.13, top=.9, wspace=.15)
-        self._draw_slice()
-        self.canvas.draw_idle()
-
-    def _draw_3d(self, angles):
-        ax = self.ax3d
-        ax.set_facecolor(BG)
-        ax.set_axis_off()
-        ax.view_init(elev=angles[0], azim=angles[1])
-        meshes = self._meshes()
-        for mesh, color in meshes:
-            if self.cutaway.get():
-                view = mesh.slice_plane(plane_origin=[self.model.bounds[:, 0].mean(), 0, 0],
-                                        plane_normal=[-1, 0, 0], cap=False)
-                triangles = view.triangles
-            else:
-                triangles = mesh.triangles
-            if not len(triangles):
-                continue
-            # Skipping faces creates fake holes in dense models such as Benchy.
-            # Keep the complete surface in the preview as well as the export.
-            ax.add_collection3d(Poly3DCollection(triangles, facecolors=color,
-                                                 edgecolors="#304a4b" if self.wireframe.get() else color,
-                                                 linewidths=.25 if self.wireframe.get() else 0, alpha=1, shade=True,
-                                                 zsort="average"))
-        if meshes:
-            bounds = np.vstack([m.bounds for m, _ in meshes])
-            low, high = bounds.min(axis=0), bounds.max(axis=0)
-            low[2] = min(0., low[2])
-            mid = (low+high)/2
-            radius = max(high-low)/2*1.08
-            ax.set_xlim(mid[0]-radius, mid[0]+radius)
-            ax.set_ylim(mid[1]-radius, mid[1]+radius)
-            ax.set_zlim(mid[2]-radius, mid[2]+radius)
-            ax.set_box_aspect((1, 1, 1))
-            # Reference build plate only; never included in exported geometry.
-            edge = radius*1.1
-            for delta in np.linspace(-edge, edge, 9):
-                ax.plot([mid[0]-edge, mid[0]+edge], [mid[1]+delta]*2, [0, 0], color="#324553", linewidth=.4)
-                ax.plot([mid[0]+delta]*2, [mid[1]-edge, mid[1]+edge], [0, 0], color="#324553", linewidth=.4)
+        self.viewport.grid_remove()
+        self.section_panel.grid_remove()
+        if mode != "断面":
+            self.viewport.grid(row=0, column=0, columnspan=2 if mode == "3D" else 1, sticky="nsew")
+        if mode != "3D":
+            self.section_panel.grid(row=0, column=1 if mode == "3D + 断面" else 0,
+                                    columnspan=1 if mode == "3D + 断面" else 2, sticky="nsew")
+            self.zbar.grid()
+            if getattr(self, "ax2d", None) is None:
+                self.figure.clear()
+                self.ax2d = self.figure.add_subplot(111)
+                self.figure.subplots_adjust(left=.18, right=.96, bottom=.18, top=.9)
+                self.toolbar.update()
+            self._draw_slice()
         else:
-            text = "M E S H B L O O M\n\nOpen a model or try a demo" if self.model is None else "Objects hidden"
-            ax.text2D(.5, .5, text, transform=ax.transAxes, ha="center", color=MUTED)
-        ax.set_title("3D / mm", color=MUTED, fontsize=10)
+            self.zbar.grid_remove()
+            self.ax2d = None
+        self.viewport.set_meshes(self._meshes(), reset_camera=reset_camera)
+        self.update_view_options()
 
     def _draw_slice(self):
+        if self._slice_job:
+            self.root.after_cancel(self._slice_job)
         self._slice_job = None
         height = self._section_z()
         self.zlabel.configure(text=f"断面 Z = {height:.2f} mm")
